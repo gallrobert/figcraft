@@ -25,8 +25,8 @@ if grep -Eq '(src|href)="/[^/]' "$SITE/index.html"; then
 fi
 
 # Size gate: Cloudflare Pages/Workers reject any single file over 25 MiB, and other
-# hosts and CDNs have similar caps. Fail well before that so a regression shows up here, not at
-# upload time. Override with FIGCRAFT_WASM_MAX_BYTES only to investigate.
+# hosts and CDNs have similar caps. Oversized modules are split losslessly and reassembled by
+# the browser loader; each emitted asset still obeys the cap.
 MAX_WASM_BYTES="${FIGCRAFT_WASM_MAX_BYTES:-26214400}" # 25 MiB (Cloudflare per-file cap)
 WASM_COUNT=0
 for wasm in "$SITE"/*.wasm; do
@@ -35,11 +35,13 @@ for wasm in "$SITE"/*.wasm; do
   size=$(wc -c <"$wasm" | tr -d ' ')
   echo "$(basename "$wasm"): $size bytes ($((size / 1048576)) MiB; limit $MAX_WASM_BYTES)"
   if [[ "$size" -gt "$MAX_WASM_BYTES" ]]; then
-    echo "error: $(basename "$wasm") is $size bytes, over the $MAX_WASM_BYTES-byte limit (Cloudflare's per-file cap is 25 MiB)" >&2
-    exit 1
+    python3 "$HERE/split_wasm.py" "$wasm" "$MAX_WASM_BYTES"
   fi
 done
 [[ "$WASM_COUNT" -gt 0 ]] || { echo "error: no .wasm in $SITE" >&2; exit 1; }
+for wasm in "$SITE"/*.wasm; do
+  [[ $(wc -c <"$wasm") -le "$MAX_WASM_BYTES" ]] || { echo "error: oversized asset $wasm" >&2; exit 1; }
+done
 
 NAME="figcraft-web-$VERSION"
 WORK="$CARGO_TARGET_DIR/web-package"
